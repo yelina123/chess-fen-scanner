@@ -1,0 +1,18 @@
+# 构建环境（本地大文件，不入库）
+build-env/
+
+# 调试/临时
+__pycache__/
+*.pyc
+*.png.orig
+
+# 安卓构建产物
+android/.gradle/
+android/build/
+android/app/build/
+
+# 本地配置
+android/local.properties
+
+# 可选：APK 体积大，通常放 Release 而非仓库
+*.apk
