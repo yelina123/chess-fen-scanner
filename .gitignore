@@ -1,0 +1,32 @@
+# 构建环境（本地大文件，不入库）
+build-env/
+
+# Python
+__pycache__/
+*.pyc
+
+# 调试/临时输出
+dbg_out/
+dbg_out2/
+synth_imgs/
+*.png.orig
+exp_out.txt
+exp2_out.txt
+exp3_out.txt
+build_log*.txt
+fetch_progress.txt
+
+# 安卓构建产物
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+
+# APK（体积大，通常走 Release 而非仓库）
+*.apk
+
+# 系统/编辑器
+.DS_Store
+Thumbs.db
+.idea/
+*.iml

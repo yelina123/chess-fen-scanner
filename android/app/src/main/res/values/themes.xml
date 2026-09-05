@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.ChessScan" parent="Theme.Material3.DayNight">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorOnPrimary">@color/on_primary</item>
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+</resources>
