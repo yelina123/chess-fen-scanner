@@ -1,93 +1,85 @@
-# 棋盘FEN识别 / chess-fen-scanner
+# 棋盘截图 → FEN 识别器
 
-把电子棋盘的截图（lichess、chess.com 这类）自动转成 FEN。纯粹在本地跑，不联网、不用云端，识别过程不把图传出去。
+把 lichess / chess.com 等电子棋盘截图**离线**识别成 FEN。两个形态：Android App（Kotlin + OpenCV 4.10）+ 电脑端命令行 `scan.py`。
 
-目前有两个形态：
+## 功能
 
-- **安卓 App**：从相册选图 → 显示 FEN，可一键复制，也能跳转到 lichess 编辑器打开这个局面。
-- **电脑命令行工具**：`scan.py`，对着一张或一批图跑，直接打印 FEN，并生成一张标了识别结果的图方便你核对。
+- 相册选图 → 自动定位棋盘 → 8×8 切格 → 剪影匹配 → 输出 FEN（默认补 `w - - 0 1`）
+- **38 套 lichess 棋子样式兼容**（自动遍历全部套件取最佳匹配，也可手动指定主题）
+- **引擎箭头/标注泛化剔除**：不针对特定箭头颜色适配，用形状匹配分 + 前景面积双判据排除箭头线/箭头头干扰
+- 自动处理走子高亮（绿/黄/红）、引擎徽章（? / !! / !）、白方在上或在下自动旋转
+- **识别棋盘预览**：棋盘框 + 格线 + 每格识别字母叠加，一眼看出识别是否成功
+- **三档识别算法**：标准（平衡）/ 高召回（少漏子）/ 高精确（少误判）
+- **清洁模式**：确认图中无引擎箭头/标注时勾选，跳过箭头判空，更准确不漏子
+- 复制 FEN、一键在 lichess 编辑器打开、运行日志（便于诊断回传）
+- 纯离线，无网络请求、无 ML 模型依赖
 
-## 它识别什么样的图
+## 下载安装
 
-电子棋盘截图，不是实体棋盘照片。具体说：
+从 [Releases](https://github.com/yelina123/chess-fen-scanner/releases) 下载最新 APK，安装到 Android 手机（Android 7.0+，鸿蒙兼容）。
 
-- 格子颜色要用 lichess 默认的米色 / 棕色这套（程序按这两个颜色找棋盘）；
-- 棋子样式是 lichess 默认的 cburnett 套件；
-- 截图里带点东西没关系：走子标记（绿/黄高亮）、王被将的红高亮、玩家信息条、坐标字母数字、右侧胜率条，程序会把高亮当背景剔掉，自己定位到棋盘本体；
-- 横竖方向无所谓，白方在上还是在下都能自动转成标准方向（白方在底部）。
-
-## 安卓 APK 怎么装
-
-成品在项目根目录：`棋盘FEN识别-v1.4-alpha.apk`，约 135MB。
-
-1. 把 APK 传到手机点一下安装；
-2. 如果提示"禁止安装未知来源应用"，去 设置 → 安全 → 允许安装外部来源应用，再装一次；
-3. 打开 App，点"选择棋盘图片"，从相册选一张棋盘截图；
-4. 识别出 FEN 后可以复制，或点"在 lichess 打开"（这步要联网；识别本身不需要）。
-
-体积大是因为 OpenCV 把 4 种 CPU 架构的原生库一起打包了，兼容性最全。想小一点可以用 ABI 拆分只留 arm64，体积能降到三分之一左右。
-
-## 电脑命令行怎么用
+## 电脑端用法
 
 ```bash
-pip install opencv-python-headless numpy
+# 依赖: opencv-python-headless, numpy
+pip install -r requirements.txt
 
-# 单张
-python scan.py 截图.png
-
-# 一次多张
-python scan.py 1.png 2.png 3.png
-
-# 想多看点信息，比如每格的识别置信度
-python scan.py 截图.png --verbose
+# 识别单张或多张图
+python scan.py 棋盘截图.jpg
+python scan.py 1.jpg 2.jpg --verbose   # 输出每格置信度
 ```
 
-输出会打印 FEN 摆放段和完整 FEN（`摆放段 w - - 0 1`）。默认还会在图片旁边生成一张 `<文件名>_scan.png`，把每个格子识别成了什么都标出来，方便你一眼核对哪里错了。
+输出 FEN 摆放段 + 完整 FEN，并在同目录生成 `*_scan.png` 可视化标注图。
+
+## 验证
+
+```bash
+python verify_all.py     # 7 张基准图, 期望 448/448 = 100%
+python verify_modes.py   # 三档算法 + 主题过滤在 10 张图上的成绩
+```
+
+当前成绩：7 张基准图 **448/448 = 100%**；3 张带引擎箭头的补充图 **191/192**（唯一错误为粗蓝箭头斜穿白兵的极端个案）。
+
+## 算法要点
+
+1. **棋盘定位**：像素到固定棋盘双色（LIGHT/DARK）的 L2 欧氏距离 < 阈值 = 棋盘色；形态学闭合 → 行/列投影找棋盘带 → 正方形化。
+2. **前景提取**：与两种底色距离都大的像素 = 棋子（固定双色法，勿改用"每格主色"，实测倒退到 78.8%）。
+3. **最大连通域**：形态学开闭后只保留面积最大分量，丢掉箭头残片/坐标文字。
+4. **判色**：剪影像素亮度 >200 占比 >0.33 = 白（勿用中位数/均值）。
+5. **判型**：剪影 crop bbox → resize 64×64（INTER_AREA）→ 与 38 套模板 IoU 取最大。
+6. **箭头剔除**：`best_iou < 0.85 且 frac ≤ 0.22 → 判空`；frac 大则保留为被污染真子。阈值由 10 图 640 格标定。
+
+> `scan.py` 与 `ChessRecognizer.kt` 是**同一算法的两份实现**，改了必须同步。双端距离度量、连通域、插值等算子必须严格一致，否则 PC 验证通过不代表安卓正确。
+
+## 安卓构建
+
+```powershell
+# JDK 17 + Android SDK (build-tools 34, platform 34)
+$env:JAVA_HOME = "C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot"
+cd android
+.\gradlew.bat assembleDebug --no-daemon
+# APK: android\app\build\outputs\apk\debug\app-debug.apk
+```
+
+本仓库不含 SDK，需自行安装；`build-env/` 为本地构建环境（已 gitignore）。
 
 ## 目录结构
 
 ```
-chess-fen-scanner/
-├── scan.py                     # 电脑端命令行识别工具
-├── requirements.txt
-├── 棋盘FEN识别-v1.4-alpha.apk   # 安卓成品
-├── android/                    # 安卓工程（Kotlin + OpenCV）
-│   └── app/src/main/java/com/chessscan/app/
-│       ├── MainActivity.kt
-│       └── ChessRecognizer.kt
-├── assets/pieces/cburnett/     # 棋子素材（SVG 源 + 识别用的 PNG 剪影）
-└── build-env/                  # 本地构建环境（Android SDK / Gradle 等）
+scan.py                  # 算法参考实现（先在这改、验证，再同步安卓）
+verify_all.py            # 7 张基准图自动验证
+verify_modes.py          # 三档算法 + 主题过滤验证
+mode_analysis.py         # 阈值标定分析
+android/                 # 安卓工程
+  app/src/main/java/com/chessscan/app/
+    ChessRecognizer.kt   # 识别引擎（与 scan.py 同算法）
+    MainActivity.kt      # 界面
+  app/src/main/res/      # 布局/主题/图标
+assets/pieces/<set>/     # 38 套棋子模板（SVG 源 + PNG 剪影）
+test_supplement/         # 带引擎箭头的补充测试图
+HANDOFF.md               # 完整交接文档（算法细节、踩坑、版本历史）
 ```
 
-## 识别思路
+## 许可证
 
-大致四步：
-
-1. **找棋盘**：按棋盘浅色、深色做行列投影，定位到棋盘所在的正方形区域；
-2. **切格子**：均匀切成 8×8；
-3. **逐格识别**：先把和棋盘底色差别大的像素挑出来当"棋子剪影"（高亮也被当成背景去掉），再和 cburnett 各棋子的剪影模板做 IoU 匹配，判断是车马象后王兵；黑白色用剪影里亮像素占比判断；
-4. **转正方向**：从 4 种旋转里挑出"白方在底部"的那个，拼出 FEN。
-
-全程用的是 OpenCV，没训练深度学习模型，所以没有模型文件也不需要网络。
-
-## 已知的短板
-
-实话实说，还没到完美的程度：
-
-- **黑白偶尔会判反**。在自己手头的 6 张测试图上，棋子类型（车马象后王兵）没认错过，颜色对了 98% 左右，错误都集中在个别带白色描边的黑子或带黑色线条的白子上。实际用的时候对着 `_scan.png` 核对一眼最稳；
-- 棋盘定位对特别极端的布局（截图里塞满了走法列表、棋盘被挤得偏得很下面）可能会偏；
-- 只识别**棋子摆放**部分；轮到谁走、易位权、过路兵、步数这些，得看截图 UI 或自己补。
-
-## 参考的开源项目 / 素材
-
-- **棋子素材**：使用的棋子图形是 [lichess](https://lichess.org) 默认的 **cburnett** 套件，源文件取自 [lichess-org/lila](https://github.com/lichess-org/lila) 仓库的 `public/piece/cburnett`。这套棋子在 lichess 里广泛使用。
-- **图像处理**：安卓端用 [OpenCV](https://opencv.org/)（Maven 依赖 `org.opencv:opencv:4.10.0`），电脑端用 `opencv-python-headless`。
-- **安卓工程**：基于 AndroidX / Material Components / Kotlin / AGP 构建，OpenCV 绑定来自官方安卓包。
-- **App 图标**：用户自行提供的棋子图。
-
-## 许可说明
-
-- 棋子素材 **cburnett 套件的版权归原作者 Colin M.L. Burnett**。Lichess 把这些棋子放在它的仓库里使用，但素材本身的授权以原作者和 lichess 的相关声明为准（参考 [lichess-org/lila 的 COPYING.md](https://github.com/lichess-org/lila/blob/f0d7f5d1ac1cece4b701891890ef2a8c0163ead2/COPYING.md)）。
-- 本项目的识别代码未特别声明许可时，以项目作者意愿为准。**如果想商用、上架或对外分发，请先确认真棋子和图标素材的授权**，别默认可以随意用。
-
-项目主要使用DeepSeek V4 Flash 构建。但这句话是我写的：）
+GPL-3.0
