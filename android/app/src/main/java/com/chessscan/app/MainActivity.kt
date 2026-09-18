@@ -3,6 +3,7 @@ package com.chessscan.app
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -43,6 +44,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var recognizer: ChessRecognizer
+    private var currentUri: Uri? = null
 
     // 打开系统相册 (ACTION_PICK + MediaStore)。相比 Photo Picker,
     // 在华为/鸿蒙等机型上更可能弹出"相册"而非文件浏览器。
@@ -50,7 +52,34 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val uri = result.data?.data
-        uri?.let { loadAndRecognize(it) } ?: toast("未选择图片")
+        uri?.let { loadAndRecognize(it, null) } ?: toast("未选择图片")
+    }
+
+    // 手动框选棋盘: 返回 (uri, 像素 Rect), 用框选区域重新识别
+    private val cropLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != RESULT_OK) return@registerForActivityResult
+        val uriStr = result.data?.getStringExtra(CropActivity.EXTRA_URI)
+        val rect = result.data?.getParcelableExtra<Rect>(CropActivity.EXTRA_RECT)
+        if (uriStr != null && rect != null) {
+            val uri = Uri.parse(uriStr)
+            currentUri = uri
+            loadAndRecognize(uri, rect)
+        }
+    }
+
+    // FEN 编辑器: 返回修改后的 FEN, 替换当前结果
+    private val fenEditorLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode != RESULT_OK) return@registerForActivityResult
+        val fen = result.data?.getStringExtra(FenEditorFlutterActivity.EXTRA_RESULT)
+        if (fen != null) {
+            binding.tvFen.text = fen
+            binding.tvStatus.text = "识别完成（已手动编辑）"
+            log("EDIT", "用户编辑FEN: $fen")
+        }
     }
 
     private fun launchGallery() {
@@ -84,6 +113,22 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnClear.setOnClickListener {
             clearSelection()
+        }
+
+        binding.btnCrop.setOnClickListener {
+            val uri = currentUri
+            if (uri == null) { toast("请先选择棋盘图片"); return@setOnClickListener }
+            val intent = Intent(this, CropActivity::class.java)
+                .putExtra(CropActivity.EXTRA_URI, uri.toString())
+            cropLauncher.launch(intent)
+        }
+
+        binding.btnEditFen.setOnClickListener {
+            val fen = binding.tvFen.text.toString()
+            if (fen.isEmpty()) { toast("暂无FEN"); return@setOnClickListener }
+            val intent = Intent(this, FenEditorFlutterActivity::class.java)
+                .putExtra(FenEditorFlutterActivity.EXTRA_FEN, fen)
+            fenEditorLauncher.launch(intent)
         }
 
         // 日志区默认折叠, 点击标题行展开/收起
@@ -198,19 +243,22 @@ class MainActivity : AppCompatActivity() {
         binding.tvLogToggle.text = if (show) "收起 ▴" else "展开 ▾"
     }
 
-    private fun loadAndRecognize(uri: Uri) {
+    private fun loadAndRecognize(uri: Uri, rect: Rect?) {
         log("IMAGE", "读取图片: ${uri.path ?: uri.toString()}")
         val bitmap = readBitmap(uri)
         if (bitmap == null) { toast("无法读取图片"); log("IMAGE", "读取图片失败"); refreshLogView(); return }
+        currentUri = uri
         log("IMAGE", "图片尺寸: ${bitmap.width}x${bitmap.height}, config=${bitmap.config}")
         binding.imgBoard.setImageBitmap(bitmap)
         binding.imgPreview.setImageDrawable(null)
-        binding.tvStatus.text = "识别中..."
+        binding.tvStatus.text = if (rect != null) "识别框选区域..." else "识别中..."
         binding.tvFen.text = ""
         binding.tvLog.text = dumpLog()
         Thread {
             try {
-                val result = recognizer.recognize(bitmap)
+                // android.graphics.Rect -> org.opencv.core.Rect
+                val ocvRect = rect?.let { org.opencv.core.Rect(it.left, it.top, it.width(), it.height()) }
+                val result = recognizer.recognize(bitmap, ocvRect)
                 val fen = result.fen ?: "定位不到棋盘"
                 runOnUiThread {
                     binding.tvStatus.text = if (result.preview != null) "识别完成（请核对下方标注图）" else fen
@@ -219,6 +267,9 @@ class MainActivity : AppCompatActivity() {
                     log("RECOG", "识别完成: $fen")
                     log("DIAG", ChessRecognizer.diag.toString())
                     refreshLogView()
+                    if (result.preview == null) {
+                        toast("识别不到棋盘，可点\"手动框选棋盘\"自己框")
+                    }
                 }
             } catch (e: Throwable) {
                 val sw = StringWriter(); e.printStackTrace(PrintWriter(sw))

@@ -8,7 +8,7 @@
 - **安卓 App**（Kotlin + OpenCV 4.10.0），主交付物，APK 在项目根。
 - **电脑端命令行** `scan.py`（Python + opencv-python-headless），用于快速验证算法。
 
-当前 7 张基准测试图（1-7.jpg）逐格识别率 **100%（448/448）**。三项优化均已完成（见 §5）。
+当前 7 张基准测试图（1-7.jpg）逐格识别率 **100%（448/448）**。v1.9 已加：APK 体积 141MB→29MB、手动框选棋盘、FEN 手动编辑器（见 §5.8）。
 
 ## 1. 项目目录结构
 
@@ -33,7 +33,7 @@ C:\Users\Administrator\Desktop\AI work\chess-fen-scanner\
 
 **重要**：`scan.py` 和 `ChessRecognizer.kt` 是同一算法的两份实现，改算法先改 `scan.py` 用 `verify_all.py` 验证通过后再同步到 Kotlin。
 
-## 2. 已实现功能（当前 APK 版本 v1.8-alpha）
+## 2. 已实现功能（当前 APK 版本 v1.9-alpha）
 
 - 相册选图（Android `ACTION_PICK` + MediaStore，华为鸿蒙下可弹相册而非文件浏览器——之前 PickVisualMedia 会弹文件浏览器，已改）。
 - OpenCV 离线识别棋盘截图 → FEN 摆放段 + 完整 FEN（默认补 `w - - 0 1`）。
@@ -147,6 +147,29 @@ python verify_all.py
 - **版本号显示**：标题栏右侧 `tvVersion` 读 `PackageManager.versionName`。
 - 所有设置（mode/theme/assumeClean）存 SharedPreferences（`chessscan_prefs`），下次启动恢复。
 
+## 5.8 v1.9：APK 体积骤降 + 手动框选棋盘 + FEN 编辑器 ✅
+
+### 体积：141MB → 29MB（-79%，准确度零影响）
+- `build.gradle.kts`：`ndk { abiFilters += listOf("arm64-v8a") }`，只打包 arm64 原生库（现代手机/鸿蒙均 arm64）。OpenCV 4 个 ABI（arm64/armv7/x86/x86_64）→ 1 个。**代价：不支持 32 位旧设备**（2020 年前的老安卓）。用户可接受。
+- **重要修正：安卓 assets 此前只有 cburnett 一套模板（35KB）**，v1.6~v1.8 声称的"38 套多套件兼容"在 APK 里实际没生效（只有 Python 端有）。本轮把项目根 `assets/pieces/<38套>/png/` 同步进 `android/app/src/main/assets/pieces/<set>/png/`（468 文件，2.15MB），APK 内验证 456 个 `_90.png`、38 套齐。
+- **目录结构坑**：Copy-Item 目录到不存在目标会"改名为内容"，必须显式建 `<set>/png/` 子目录再拷，否则 Kotlin `assets.open("pieces/$sname/png/$name")` 读不到模板（已验证 APK 内条目路径）。
+- **懒加载防启动卡顿**：`loadTemplates(full)` 启动只加载 cburnett（12 个，毫秒级），首次识别时 `ensureFullTemplates()` 在识别线程（后台）补齐 38 套。`pieceSetNames()` 直接列 assets 目录，主题 Spinner 无需等全量加载。
+- **颜值**：识别预览从"字母"升级为**真实棋子图标**（cburnett PNG，Canvas 绘制）；主界面淡蓝渐变背景；预览/编辑器共用棋子图标。
+
+### 手动框选棋盘（任何情况下可纠正定位）
+- 新增 `CropOverlayView`（fitCenter 显示原图，拖拽画矩形，框外遮罩+四角手柄，内部存图片像素坐标 Rect）+ `CropActivity`（返回 Uri+Rect）。
+- `ChessRecognizer.recognize(bitmap, boardRect: org.opencv.core.Rect? = null)`：null=自动定位；非 null=直接用框选区域（**外扩 2%** 容错，越界裁剪）。
+- 主界面新按钮"手动框选棋盘"：识别失败 / 定位不准 / 任何情况都可进框选页重新识别。**注意**：MainActivity 里 android.graphics.Rect 需转 `org.opencv.core.Rect(x,y,w,h)`（OpenCV Rect 无 left/top 成员，用 x/y/width）。
+- 识别失败时自动 Toast 提示"可手动框选"。
+
+### FEN 编辑器（手动改错格后复制）
+- 新增 `FenEditorView`：8×8 棋盘（LIGHT/DARK 色 + cburnett 图标），点击格子循环 `空→wP→wN→wB→wR→wQ→wK→bK→bQ→bR→bB→bN→bP→空`；`grid[0]=rank8`，`setFromFen/toFen` 与标准 FEN 摆放段一致（Python roundtrip 已验：`rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR` ↔ 逐格）。
+- 新增 `FenEditorActivity`：实时 FEN 显示 + 复制FEN + 完成（返回新 FEN 回填主界面）。
+- 主界面"编辑FEN"按钮（结果卡片第三钮）。
+
+### 构建校验
+- versionCode 19 / versionName 1.9-alpha；aapt 校验 native-code=arm64-v8a；APK 内 456 模板/38 套确认。
+
 ## 6. 安卓构建 & 安装
 
 ```powershell
@@ -155,9 +178,10 @@ $env:JAVA_HOME="C:\Program Files\Eclipse Adoptium\jdk-17.0.20.101-hotspot"
 cd "C:\Users\Administrator\Desktop\AI work\chess-fen-scanner\android"
 .\gradlew.bat assembleDebug --no-daemon
 # APK 输出：android\app\build\outputs\apk\debug\app-debug.apk
-# 复制到项目根并命名版本，如：棋盘FEN识别-v1.8-alpha.apk
+# 复制到项目根并命名版本，如：棋盘FEN识别-v1.9-alpha.apk
 ```
-- **每轮改版记得 bump `android/app/build.gradle.kts` 的 versionCode/versionName**（当前 18/1.8-alpha）。
+- **每轮改版记得 bump `android/app/build.gradle.kts` 的 versionCode/versionName**（当前 19/1.9-alpha）。
+- **体积**：v1.9 起只打 arm64（29MB）。若需支持 32 位旧设备，去掉 `ndk abiFilters` 行重建（回 141MB）。
 - 用户在鸿蒙 4.2 手机测试，用"复制日志"回传诊断。
 
 ## 7. GitHub 发布状态
@@ -184,10 +208,14 @@ cd "C:\Users\Administrator\Desktop\AI work\chess-fen-scanner\android"
 12. **7.jpg 的"标准答案"曾被误标为 1.d4 初始局面**：核对测试图真实内容后再定标准答案，别轻信交接里的 FEN；7.jpg 真实局面见 §5.3。
 13. **双端距离度量必须一致（v1.7）**：scan.py 用 L2 欧氏距离；Kotlin 早期 locateBoard 用 L∞（absdiff+inRange）、classify 用 BGR2GRAY 加权平均，更宽松导致定位框偏大 50px、全盘误判。已统一为 Kotlin bgrDist()。
 14. **最大连通域不能省（v1.8 漏兵）**：scan.py classify 形态学后只保留最大连通域；Kotlin 早期漏这步，箭头残片撑大 bbox 拉低 IoU，白兵被判空。双端必须有，且 resize 统一 INTER_AREA。
+15. **Copy-Item 目录陷阱（v1.9）**：PowerShell `Copy-Item <srcDir> <dstDir> -Recurse` 在 dst 不存在时是"改名为内容"，会丢一层目录。安卓 assets 必须显式建 `<set>/png/` 再拷，否则 Kotlin assets.open 找不到模板（构建后要解包 APK 验证条目路径）。
+16. **OpenCV Rect vs Android Rect（v1.9）**：org.opencv.core.Rect 成员是 x/y/width/height（无 left/top），MainActivity 从 CropActivity 拿的是 android.graphics.Rect，传 recognize 前必须转 `org.opencv.core.Rect(l, t, w, h)`。
+17. **Kotlin 全量模板加载卡启动（v1.9）**：38 套 456 模板同步进 assets 后，init 同步加载会卡 UI 数秒 → 改懒加载：启动只读 cburnett，首次识别在后台线程补齐。pieceSetNames 直接列 assets 目录。
+18. **min/max 歧义（v1.9）**：Kotlin 文件 `import org.opencv.core.*` 后裸 `min(Int,Int)` 会解析成集合扩展报错，用 `kotlin.math.min/max` 显式限定。
 
 ## 9. 下一步建议（给接手者）
 
-1. 三项优化已完成，7 图全对 100%（`python verify_all.py`）。
-2. 后续可做：真带引擎徽章(?/!!/!)的新测试图（当前 7.jpg 无徽章）；更多棋盘主题配色（当前调色板仅 lichess 默认色）。
-3. 有新图先跑 verify_all 回归，再同步 scan.py ↔ ChessRecognizer.kt。
+1. 7 图 100%；补充图 a/b/c = 191/192（唯一错 b.jpg g2 粗蓝箭头）。改算法先跑 `verify_all.py` / `verify_modes.py` / `test_supp.py` 回归，再同步 scan.py ↔ ChessRecognizer.kt。
+2. v1.9 新功能待真机验证：手动框选（CropActivity）、FEN 编辑器（FenEditorActivity）、38 套模板全量识别（懒加载后首次识别会慢 1-2 秒属正常）、arm64-only 在旧设备上的兼容性。
+3. 后续可做：真带引擎徽章(?/!!/!)的新测试图；更多棋盘主题配色（当前调色板仅 lichess 默认色）；新图先跑回归再同步。
 4. 推送 GitHub 时排除 build-env/、*.apk、local.properties。

@@ -3,7 +3,8 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:fillViewport="true"
+    android:background="@drawable/bg_app_gradient">
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -40,27 +41,40 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="从相册选择电子棋盘截图（lichess / chess.com），离线识别出 FEN。"
+            android:text="选择棋盘截图，离线识别 FEN"
             android:textSize="13sp"
             android:textColor="@color/text_secondary" />
 
-        <!-- 选图 / 清除 操作区 -->
-        <LinearLayout
+        <!-- 主操作: 选图 -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPick"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
+            android:text="选择棋盘图片"
+            android:textSize="16sp"
+            app:icon="@android:drawable/ic_menu_gallery"
+            app:iconGravity="textStart"
+            app:iconPadding="8dp" />
+
+        <!-- 次要操作: 框选 + 清除 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
             android:orientation="horizontal">
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnPick"
+                android:id="@+id/btnCrop"
+                style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginEnd="8dp"
-                android:text="选择棋盘图片"
-                app:icon="@android:drawable/ic_menu_gallery"
+                android:layout_marginEnd="6dp"
+                android:text="手动框选"
+                app:icon="@android:drawable/ic_menu_crop"
                 app:iconGravity="textStart"
-                app:iconPadding="8dp" />
+                app:iconPadding="6dp" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnClear"
@@ -68,11 +82,11 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginStart="8dp"
-                android:text="清除已选图片"
+                android:layout_marginStart="6dp"
+                android:text="清除图片"
                 app:icon="@android:drawable/ic_menu_delete"
                 app:iconGravity="textStart"
-                app:iconPadding="8dp" />
+                app:iconPadding="6dp" />
         </LinearLayout>
 
         <!-- 预览卡片 -->
@@ -108,7 +122,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:layout_marginBottom="6dp"
-                android:text="识别标注（绿=白棋，橙=黑棋；格子/字母错位说明定位或识别有误）"
+                android:text="识别标注"
                 android:textSize="12sp"
                 android:textColor="@color/text_secondary" />
 
@@ -164,8 +178,18 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:layout_marginEnd="8dp"
+                    android:layout_marginEnd="6dp"
                     android:text="复制FEN" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnEditFen"
+                    style="@style/Widget.Material3.Button.TonalButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="6dp"
+                    android:layout_marginEnd="6dp"
+                    android:text="编辑FEN" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnOpenLichess"
@@ -173,8 +197,8 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:layout_marginStart="8dp"
-                    android:text="在lichess打开" />
+                    android:layout_marginStart="6dp"
+                    android:text="lichess" />
             </LinearLayout>
         </LinearLayout>
 
@@ -190,7 +214,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="识别设置（切换后对下一次识别生效）"
+                android:text="识别设置"
                 android:textSize="14sp"
                 android:textStyle="bold"
                 android:textColor="?attr/colorOnSurface" />
@@ -213,7 +237,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
-                android:text="棋子主题（不知道就选“自动”，匹配全部 38 套样式）"
+                android:text="棋子主题"
                 android:textSize="13sp"
                 android:textColor="@color/text_secondary" />
 
@@ -228,7 +252,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="图中无引擎箭头 / ? ! 标注（勾选后用更准确算法，不漏子）"
+                android:text="图中无引擎箭头/标注"
                 android:textSize="13sp" />
         </LinearLayout>
 

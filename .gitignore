@@ -30,3 +30,11 @@ android/local.properties
 Thumbs.db
 .idea/
 *.iml
+
+# Flutter module cache
+flutter_editor/.dart_tool/
+flutter_editor/.android/.gradle/
+flutter_editor/.android/build/
+flutter_editor/build/
+flutter_editor/.android/local.properties
+

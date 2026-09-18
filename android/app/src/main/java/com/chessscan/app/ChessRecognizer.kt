@@ -46,7 +46,7 @@ class ChessRecognizer(context: Context) {
     // 用户确认图中无引擎箭头/?/! 等标注: true 时跳过箭头判空, 直接取最佳匹配(更准确)。
     // 走子高亮(黄绿红)掩膜不受影响。
     @Volatile var assumeClean: Boolean = false
-    fun pieceSetNames(): List<String> = templates.keys.sorted()
+    fun pieceSetNames(): List<String> = (appContext.assets.list("pieces") ?: emptyArray()).sorted()
 
     // 供 UI 展示初始化状态/错误
     val ready: Boolean get() = opencvReady
@@ -65,7 +65,7 @@ class ChessRecognizer(context: Context) {
             opencvReady = false
         }
         if (opencvReady) {
-            try { loadTemplates() } catch (e: Throwable) {
+            try { loadTemplates(false) } catch (e: Throwable) {
                 initMsg += "; 模板加载异常: ${e.javaClass.simpleName}"
                 opencvReady = false
             }
@@ -73,9 +73,14 @@ class ChessRecognizer(context: Context) {
     }
 
     // ---------------- 模板剪影 ----------------
-    private fun loadTemplates() {
+    @Volatile private var fullLoaded = false
+
+    /** 启动只加载 cburnett(快); 首次识别时在后台线程 ensureFullTemplates 补齐全部 38 套 */
+    private fun loadTemplates(full: Boolean) {
         val setNames = appContext.assets.list("pieces") ?: return
         for (sname in setNames) {
+            if (templates.containsKey(sname)) continue
+            if (!full && sname != "cburnett") continue
             val stpl = HashMap<String, Mat>()
             for (color in arrayOf("w", "b")) {
                 for (piece in PIECES) {
@@ -105,6 +110,14 @@ class ChessRecognizer(context: Context) {
             }
             if (stpl.size == 12) templates[sname] = stpl
         }
+        if (full) fullLoaded = true
+    }
+
+    private fun ensureFullTemplates() {
+        if (fullLoaded) return
+        synchronized(this) {
+            if (!fullLoaded) { loadTemplates(true); fullLoaded = true }
+        }
     }
 
     private fun bboxOf(binary: Mat): Rect {
@@ -126,7 +139,9 @@ class ChessRecognizer(context: Context) {
     }
 
     // ---------------- 入口 ----------------
-    fun recognize(bitmap: Bitmap): RecogResult {
+    /** bitmap: 原图; boardRect: 用户手动框选的棋盘区域(像素, 可 null)。
+     *  null 时自动定位棋盘, 非 null 时直接使用框选区域。 */
+    fun recognize(bitmap: Bitmap, boardRect: Rect? = null): RecogResult {
         if (!opencvReady) return RecogResult("OpenCV 初始化失败", null, 0)
         // 兼容性: 硬件位图/非ARGB无法直接转Mat, 统一复制成 ARGB_8888 软件位图
         val safe = if (bitmap.config == Bitmap.Config.HARDWARE ||
@@ -137,15 +152,21 @@ class ChessRecognizer(context: Context) {
         Utils.bitmapToMat(safe, bgr)
         Imgproc.cvtColor(bgr, bgr, Imgproc.COLOR_RGBA2BGR)
 
-        val boardRect = locateBoard(bgr) ?: return RecogResult("定位不到棋盘", null, 0)
-        val bx0 = boardRect[0]; val by0 = boardRect[1]
-        val bx1 = boardRect[2]; val by1 = boardRect[3]
-        val board = Mat(bgr, Rect(bx0, by0, bx1 - bx0, by1 - by0))
+        val rect = boardRect ?: locateBoard(bgr)?.let {
+            Rect(it[0], it[1], it[2] - it[0], it[3] - it[1])
+        } ?: return RecogResult("定位不到棋盘", null, 0)
+        // 手动框选: 严格按用户框选区域裁切识别, 绝不外扩。
+        // 自动定位: 直接用 locateBoard 结果。
+        val bx0 = rect.x; val by0 = rect.y
+        val bw = rect.width; val bh = rect.height
+        val px0 = bx0; val py0 = by0
+        val px1 = minOf(bgr.cols(), bx0 + bw); val py1 = minOf(bgr.rows(), by0 + bh)
+        val board = Mat(bgr, Rect(px0, py0, px1 - px0, py1 - py0))
         val cellCount = 8
         val cw = board.cols(); val ch = board.rows()
         val cellW = cw / cellCount; val cellH = ch / cellCount
         clearDiag()
-        diag.append("board=${boardRect.contentToString()} size=${cw}x${ch} cell=${cellW}x${cellH} mode=$mode theme=${theme ?: "auto"}\n")
+        diag.append("board=(${px0},${py0})-(${px1},${py1}) size=${cw}x${ch} cell=${cellW}x${cellH} mode=$mode theme=${theme ?: "auto"}\n")
         val grid: Array<Array<String?>> = Array(8) { arrayOfNulls<String>(8) }
 
         for (r in 0 until 8) {
@@ -155,53 +176,69 @@ class ChessRecognizer(context: Context) {
             }
         }
         val (fen, rot) = bestOrientation(grid)
-        val preview = drawPreview(bgr, bx0, by0, cellW, cellH, grid, rot)
+        val preview = drawPreview(bgr, px0, py0, cellW, cellH, grid, rot)
         return RecogResult("$fen w - - 0 1", preview, rot)
     }
 
-    /** 在原图副本上画棋盘框、8x8 格线和每格识别结果(旋转到最终方向), 缩放到宽 720 供 UI 显示。 */
+    // 预览/编辑器用的棋子图标(cburnett 套件, 加载时按需)
+    private val pieceIcons: MutableMap<String, android.graphics.Bitmap> = HashMap()
+    private fun loadPieceIcons() {
+        try {
+            for (color in arrayOf("w", "b")) {
+                for (piece in PIECES) {
+                    val key = "$color$piece"
+                    if (pieceIcons.containsKey(key)) continue
+                    val `is` = appContext.assets.open("pieces/cburnett/png/${key}_90.png")
+                    val bmp = BitmapFactory2.decodeStream(`is`)
+                    pieceIcons[key] = bmp
+                }
+            }
+        } catch (e: Exception) {
+            // 图标缺失不影响识别
+        }
+    }
+    fun pieceIcon(colorPiece: String): android.graphics.Bitmap? = pieceIcons[colorPiece]
+
+    /** 在原图副本上画棋盘框、8x8 格线和每格识别棋子图标(旋转到最终方向), 缩放到宽 720 供 UI 显示。 */
     private fun drawPreview(bgr: Mat, bx0: Int, by0: Int, cellW: Int, cellH: Int,
                             grid: Array<Array<String?>>, rot: Int): Bitmap {
-        val ov = Mat()
-        bgr.copyTo(ov)
-        // 棋盘外框(绿)
-        Imgproc.rectangle(ov, Point(bx0.toDouble(), by0.toDouble()),
-            Point((bx0 + cellW * 8).toDouble(), (by0 + cellH * 8).toDouble()),
-            Scalar(0.0, 220.0, 0.0), 4)
+        if (pieceIcons.isEmpty()) loadPieceIcons()
+        val rgba = Mat()
+        Imgproc.cvtColor(bgr, rgba, Imgproc.COLOR_BGR2RGBA)
+        val src = android.graphics.Bitmap.createBitmap(rgba.cols(), rgba.rows(), android.graphics.Bitmap.Config.ARGB_8888)
+        Utils.matToBitmap(rgba, src)
+        val W = 720
+        val scale = W.toFloat() / src.width
+        val out = android.graphics.Bitmap.createScaledBitmap(src, W, (src.height * scale).toInt(), true)
+        val canvas = android.graphics.Canvas(out)
+        val border = android.graphics.Paint().apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 6f; color = android.graphics.Color.rgb(0, 220, 0)
+        }
+        canvas.drawRect(bx0 * scale, by0 * scale, (bx0 + cellW * 8) * scale, (by0 + cellH * 8) * scale, border)
         val shown = rotGrid(grid, rot)
-        val font = Imgproc.FONT_HERSHEY_SIMPLEX
-        val scale = cellW / 72.0
+        val gridPaint = android.graphics.Paint().apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 1f; color = android.graphics.Color.argb(90, 255, 255, 255)
+        }
         for (r in 0 until 8) {
             for (c in 0 until 8) {
                 val x = bx0 + c * cellW; val y = by0 + r * cellH
-                // 格线
-                Imgproc.rectangle(ov, Point(x.toDouble(), y.toDouble()),
-                    Point((x + cellW).toDouble(), (y + cellH).toDouble()),
-                    Scalar(60.0, 60.0, 60.0), 1)
+                canvas.drawRect(x * scale, y * scale, (x + cellW) * scale, (y + cellH) * scale, gridPaint)
                 val pc = shown[r][c] ?: continue
-                val txt = if (pc[0] == 'w') pc[1].uppercase() else pc[1].lowercase()
-                val pos = Point((x + cellW * 0.18), (y + cellH * 0.78))
-                // 黑字描边 + 白字填充, 任何底色上都清晰
-                Imgproc.putText(ov, txt, pos, font, scale, Scalar(0.0, 0.0, 0.0), 6)
-                val isWhite = pc[0] == 'w'
-                val fill = if (isWhite) Scalar(0.0, 230.0, 0.0) else Scalar(0.0, 120.0, 255.0)
-                Imgproc.putText(ov, txt, pos, font, scale, fill, 2)
+                val icon = pieceIcons[pc] ?: continue
+                val dst = android.graphics.RectF(
+                    (x + cellW * 0.08f) * scale, (y + cellH * 0.08f) * scale,
+                    (x + cellW * 0.92f) * scale, (y + cellH * 0.92f) * scale)
+                canvas.drawBitmap(icon, null, dst, null)
             }
         }
-        // 缩放到宽 720 省内存
-        val W = 720
-        val H = ov.rows() * W / ov.cols()
-        val small = Mat()
-        Imgproc.resize(ov, small, Size(W.toDouble(), H.toDouble()), 0.0, 0.0, Imgproc.INTER_AREA)
-        val rgba = Mat()
-        Imgproc.cvtColor(small, rgba, Imgproc.COLOR_BGR2RGBA)
-        val bmp = Bitmap.createBitmap(rgba.cols(), rgba.rows(), Bitmap.Config.ARGB_8888)
-        Utils.matToBitmap(rgba, bmp)
-        return bmp
+        return out
     }
 
     // ---------------- 单格分类 ----------------
     private fun classify(cell: Mat): String? {
+        ensureFullTemplates()
         val ch = cell.rows(); val cw = cell.cols()
         val hmask = highlightMask(cell)
 

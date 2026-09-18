@@ -1,0 +1,25 @@
+name: flutter_editor
+description: "FEN editor module for chess-fen-scanner."
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  chessground: ^10.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  module:
+    androidX: true
+    androidPackage: com.chessscan.flutter_editor
+    iosBundleIdentifier: com.chessscan.flutterEditor

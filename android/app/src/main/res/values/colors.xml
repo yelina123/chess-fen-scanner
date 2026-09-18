@@ -7,4 +7,5 @@
     <color name="accent">#2E7D32</color>
     <color name="text_secondary">#8A8A8A</color>
     <color name="divider">#E0E0E0</color>
+    <color name="black">#000000</color>
 </resources>
