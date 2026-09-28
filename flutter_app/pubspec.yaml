@@ -1,0 +1,66 @@
+name: chess_fen_app
+description: "国际象棋棋盘截图 → FEN 离线识别（Flutter 重构版）"
+
+publish_to: 'none'
+
+version: 2.0.0+23
+
+environment:
+  sdk: ^3.13.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  chessground: ^10.1.1
+  dartchess: ^0.13.1
+  image: ^4.3.0
+  image_picker: ^1.1.2
+  shared_preferences: ^2.3.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/pieces/alpha/png/
+    - assets/pieces/anarcandy/png/
+    - assets/pieces/caliente/png/
+    - assets/pieces/california/png/
+    - assets/pieces/cardinal/png/
+    - assets/pieces/cburnett/png/
+    - assets/pieces/celtic/png/
+    - assets/pieces/chess7/png/
+    - assets/pieces/chessnut/png/
+    - assets/pieces/companion/png/
+    - assets/pieces/cooke/png/
+    - assets/pieces/dubrovny/png/
+    - assets/pieces/fantasy/png/
+    - assets/pieces/firi/png/
+    - assets/pieces/fresca/png/
+    - assets/pieces/gioco/png/
+    - assets/pieces/governor/png/
+    - assets/pieces/horsey/png/
+    - assets/pieces/icpieces/png/
+    - assets/pieces/kiwen-suwi/png/
+    - assets/pieces/kosal/png/
+    - assets/pieces/leipzig/png/
+    - assets/pieces/maestro/png/
+    - assets/pieces/merida/png/
+    - assets/pieces/monarchy/png/
+    - assets/pieces/mono/png/
+    - assets/pieces/mpchess/png/
+    - assets/pieces/papercut/png/
+    - assets/pieces/pirouetti/png/
+    - assets/pieces/pixel/png/
+    - assets/pieces/reillycraig/png/
+    - assets/pieces/rhosgfx/png/
+    - assets/pieces/riohacha/png/
+    - assets/pieces/shahi-ivory-brown/png/
+    - assets/pieces/spatial/png/
+    - assets/pieces/staunty/png/
+    - assets/pieces/tatiana/png/
+    - assets/pieces/totoy/png/
