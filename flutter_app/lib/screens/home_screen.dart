@@ -11,8 +11,10 @@ import 'package:image_picker/image_picker.dart';
 import '../models/recognizer.dart';
 import '../models/settings.dart';
 import '../models/template_loader.dart';
+import 'about_screen.dart';
 import 'crop_screen.dart';
 import 'fen_editor_screen.dart';
+import 'log_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -34,10 +36,16 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _displayFen; // 编辑后的 FEN
   Side _orientation = Side.white;
 
+  /// 截图棋盘预览（棋盘区域裁剪 + 网格 + 识别标注），PNG
+  Uint8List? _boardPreviewPng;
+
+  /// 最近一次识别的逐格诊断日志
+  List<String> _diag = const [];
+
   Map<String, Map<String, Uint8List>> _templates = {};
 
-  static const _version = '2.0.0';
-  static const _build = '23';
+  static const _version = '2.0.2';
+  static const _build = '25';
 
   @override
   void initState() {
@@ -47,10 +55,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _init() async {
     _settings = await AppSettings.load();
-    // 后台加载模板（全部套件）
-    final tpl = await Isolate.run(() => TemplateLoader.load());
-    if (mounted) {
-      setState(() => _templates = tpl);
+    // 模板在主 isolate 加载（rootBundle 只能在主 isolate 使用）
+    try {
+      final tpl = await TemplateLoader.load();
+      if (mounted) {
+        setState(() => _templates = tpl);
+      }
+    } catch (e) {
+      debugPrint('模板加载失败: $e');
     }
   }
 
@@ -97,6 +109,11 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() { _busy = true; });
 
     final templates = _templates;
+    if (templates.isEmpty) {
+      setState(() { _busy = false; });
+      _toast('棋子模板加载中，请稍候重试');
+      return;
+    }
     final w = _imgW, h = _imgH;
     final mode = _settings.mode;
     final theme = _settings.theme;
@@ -111,16 +128,28 @@ class _HomeScreenState extends State<HomeScreen> {
           );
 
     try {
-      final result = await Isolate.run(() {
-        final r = Recognizer(templates);
-        return r.recognize(bytes, w, h,
-            boardRect: boardRect, mode: mode, theme: theme, assumeClean: assumeClean);
-      });
+      // 用 Isolate.spawn + 顶层 worker（不捕获 this，避免把 Widget 树发进 isolate）
+      final job = RecogJob(
+        templates: templates,
+        rgb: bytes,
+        w: w,
+        h: h,
+        boardRect: boardRect,
+        mode: mode,
+        theme: theme,
+        assumeClean: assumeClean,
+      );
+      final port = ReceivePort();
+      await Isolate.spawn(_recognizeWorker, [port.sendPort, job]);
+      final result = await port.first as RecogResult;
+      port.close();
       if (!mounted) return;
       setState(() {
         _busy = false;
         _result = result;
         _displayFen = result.fen;
+        _boardPreviewPng = _buildBoardPreview();
+        _diag = result.diag;
       });
       if (result.error != null) _toast(result.error!);
     } catch (e) {
@@ -178,12 +207,91 @@ class _HomeScreenState extends State<HomeScreen> {
     final ps = _themeToPieceSet(_settings.theme);
     final edited = await Navigator.push<String>(
       context,
-      MaterialPageRoute(builder: (_) => FenEditorScreen(initialFen: fen, pieceSet: ps)),
+      MaterialPageRoute(
+        builder: (_) => FenEditorScreen(
+          initialFen: fen,
+          pieceSet: ps,
+          boardPreview: _boardPreviewPng,
+        ),
+      ),
     );
     if (edited != null && edited.isNotEmpty) {
       setState(() => _displayFen = edited);
       _toast('已更新 FEN');
     }
+  }
+
+  /// 估算 BitmapFont 字符串宽度
+  int _textWidth(img.BitmapFont font, String s) {
+    var w = 0;
+    for (final c in s.codeUnits) {
+      final ch = font.characters[c];
+      if (ch != null) w += ch.xAdvance;
+    }
+    return w;
+  }
+
+  /// 生成截图棋盘预览：裁剪棋盘区域，画 8x8 网格并标注识别棋子。
+  Uint8List? _buildBoardPreview() {
+    final result = _result;
+    final bytes = _imageBytes;
+    if (result == null || result.error != null || bytes == null) return null;
+    final bx0 = result.bx0, by0 = result.by0, bw = result.bw, bh = result.bh;
+    if (bw < 8 || bh < 8) return null;
+
+    const cell = 64;
+    final size = cell * 8;
+    final im = img.Image(width: size, height: size);
+    for (var y = 0; y < size; y++) {
+      final sy = by0 + (y * bh) ~/ size;
+      if (sy >= _imgH) continue;
+      for (var x = 0; x < size; x++) {
+        final sx = bx0 + (x * bw) ~/ size;
+        if (sx >= _imgW) continue;
+        final o = (sy * _imgW + sx) * 3;
+        im.setPixelRgb(x, y, bytes[o], bytes[o + 1], bytes[o + 2]);
+      }
+    }
+
+    // 网格线
+    final lineColor = img.ColorRgb8(0, 0, 0);
+    for (var i = 0; i <= 8; i++) {
+      final p = i * cell;
+      img.drawLine(im, x1: p, y1: 0, x2: p, y2: size - 1, color: lineColor, thickness: 2);
+      img.drawLine(im, x1: 0, y1: p, x2: size - 1, y2: p, color: lineColor, thickness: 2);
+    }
+
+    // 识别字母标注（grid 为 rank8 top）
+    final font = img.arial24;
+    for (var r = 0; r < 8; r++) {
+      for (var c = 0; c < 8; c++) {
+        final code = result.grid[r][c];
+        if (code == null || code.length < 2) continue;
+        final label = code.substring(1).toUpperCase();
+        final isWhite = code.startsWith('w');
+        img.fillRect(
+          im,
+          x1: c * cell,
+          y1: r * cell,
+          x2: c * cell + cell - 1,
+          y2: r * cell + cell - 1,
+          color: img.ColorRgba8(0, 0, 0, 70),
+        );
+        final tw = _textWidth(font, label);
+        img.drawString(
+          im,
+          label,
+          font: font,
+          x: c * cell + (cell - tw) ~/ 2,
+          y: r * cell + (cell - font.lineHeight) ~/ 2,
+          color: isWhite ? img.ColorRgb8(255, 255, 255) : img.ColorRgb8(20, 20, 20),
+        );
+      }
+    }
+
+    // 按朝向 180° 旋转
+    final out = _orientation == Side.white ? im : img.copyRotate(im, angle: 180);
+    return Uint8List.fromList(img.encodePng(out));
   }
 
   PieceSet _themeToPieceSet(String? theme) {
@@ -220,6 +328,24 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('棋盘 FEN 识别', style: TextStyle(fontSize: 17)),
         actions: [
+          IconButton(
+            tooltip: '识别日志',
+            icon: const Icon(Icons.article_outlined),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => LogScreen(initialLog: _diag)),
+            ),
+          ),
+          IconButton(
+            tooltip: '关于',
+            icon: const Icon(Icons.info_outline),
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => AboutScreen(version: _version, buildNumber: _build),
+              ),
+            ),
+          ),
           IconButton(
             tooltip: '设置',
             icon: const Icon(Icons.settings_outlined),
@@ -310,15 +436,24 @@ class _HomeScreenState extends State<HomeScreen> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                     child: Stack(
                       children: [
-                        StaticChessboard(
-                          size: boardSize,
-                          fen: fen!,
-                          orientation: _orientation,
-                          settings: StaticChessboardSettings(
-                            pieceAssets: _themeToPieceSet(_settings.theme).assets,
-                            animationDuration: Duration.zero,
+                        if (_boardPreviewPng != null)
+                          Image.memory(
+                            _boardPreviewPng!,
+                            width: boardSize,
+                            height: boardSize,
+                            fit: BoxFit.fill,
+                            gaplessPlayback: true,
+                          )
+                        else
+                          StaticChessboard(
+                            size: boardSize,
+                            fen: fen!,
+                            orientation: _orientation,
+                            settings: StaticChessboardSettings(
+                              pieceAssets: _themeToPieceSet(_settings.theme).assets,
+                              animationDuration: Duration.zero,
+                            ),
                           ),
-                        ),
                         Positioned(
                           top: 8,
                           right: 8,
@@ -327,7 +462,10 @@ class _HomeScreenState extends State<HomeScreen> {
                             iconSize: 18,
                             constraints: const BoxConstraints.tightFor(width: 36, height: 36),
                             icon: const Icon(Icons.flip),
-                            onPressed: () => setState(() => _orientation = _orientation.opposite),
+                            onPressed: () => setState(() {
+                              _orientation = _orientation.opposite;
+                              _boardPreviewPng = _buildBoardPreview();
+                            }),
                           ),
                         ),
                       ],
@@ -346,7 +484,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         Expanded(
                           child: SelectableText(
-                            fen,
+                            fen!,
                             style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
                           ),
                         ),
@@ -428,4 +566,49 @@ class _HomeScreenState extends State<HomeScreen> {
       default: return '均衡';
     }
   }
+}
+
+/// 识别任务（纯数据，可跨 isolate 发送）
+class RecogJob {
+  final Map<String, Map<String, Uint8List>> templates;
+  final Uint8List rgb;
+  final int w, h;
+  final BoardRect? boardRect;
+  final String mode;
+  final String? theme;
+  final bool assumeClean;
+
+  const RecogJob({
+    required this.templates,
+    required this.rgb,
+    required this.w,
+    required this.h,
+    this.boardRect,
+    required this.mode,
+    this.theme,
+    required this.assumeClean,
+  });
+}
+
+/// 识别 worker（顶层函数，不捕获任何外层状态）
+void _recognizeWorker(List<Object?> msg) {
+  final reply = msg[0] as SendPort;
+  final job = msg[1] as RecogJob;
+  RecogResult result;
+  try {
+    final r = Recognizer(job.templates);
+    result = r.recognize(
+      job.rgb, job.w, job.h,
+      boardRect: job.boardRect,
+      mode: job.mode,
+      theme: job.theme,
+      assumeClean: job.assumeClean,
+    );
+  } catch (e) {
+    result = RecogResult(
+      error: '识别异常: $e',
+      grid: List.generate(8, (_) => List.filled(8, null)),
+    );
+  }
+  reply.send(result);
 }

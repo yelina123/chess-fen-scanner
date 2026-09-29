@@ -7,6 +7,10 @@ class RecogResult {
   final int rot;          // 旋转次数（0-3）
   final List<List<String?>> grid; // 8x8 识别结果（rank8 top，未旋转）
   final int bx0, by0, bw, bh;     // 棋盘区域（原图坐标）
+
+  /// 逐格诊断日志（与识别算法一致，用于排查）
+  final List<String> diag;
+
   RecogResult({
     this.fen,
     this.error,
@@ -16,6 +20,7 @@ class RecogResult {
     this.by0 = 0,
     this.bw = 0,
     this.bh = 0,
+    this.diag = const [],
   });
 }
 
@@ -48,6 +53,9 @@ class Recognizer {
   /// 模板: set 名 -> (color+piece -> 64x64 二值剪影)
   final Map<String, Map<String, Uint8List>> templates;
 
+  /// 诊断日志缓冲（每次 recognize 清空）
+  final List<String> diag = [];
+
   Recognizer(this.templates);
 
   // ---------------- 主入口 ----------------
@@ -62,6 +70,7 @@ class Recognizer {
     String? theme,
     bool assumeClean = false,
   }) {
+    diag.clear();
     List<int>? bbox;
     if (boardRect != null) {
       bbox = [boardRect.x, boardRect.y, boardRect.x + boardRect.w, boardRect.y + boardRect.h];
@@ -85,6 +94,8 @@ class Recognizer {
       return RecogResult(error: '棋盘区域过小', grid: List.generate(8, (_) => List.filled(8, null)));
     }
 
+    diag.add('board=($bx0,$by0)-($bx1,$by1) size=${bw}x${bh} cell=${cellW}x${cellH} mode=$mode theme=${theme ?? 'auto'}');
+
     final grid = List.generate(8, (_) => List<String?>.filled(8, null));
     for (var r = 0; r < 8; r++) {
       for (var c = 0; c < 8; c++) {
@@ -95,7 +106,7 @@ class Recognizer {
 
     final (fen, rot) = bestOrientation(grid);
     return RecogResult(fen: '$fen w - - 0 1', rot: rot, grid: grid,
-        bx0: bx0, by0: by0, bw: bw, bh: bh);
+        bx0: bx0, by0: by0, bw: bw, bh: bh, diag: List.unmodifiable(diag));
   }
 
   // ---------------- 棋盘定位 ----------------
@@ -252,7 +263,10 @@ class Recognizer {
     var cnt = 0;
     for (var i = 0; i < largest.length; i++) cnt += largest[i];
     final frac = cnt / (cw * ch);
-    if (frac < 0.03) return null;
+    if (frac < 0.03) {
+      diag.add('frac=${frac.toStringAsFixed(4)} ->EMPTY');
+      return null;
+    }
 
     // 6. 判色：剪影像素亮度 >200 占比 >0.33 = 白
     var brightCnt = 0;
@@ -307,7 +321,11 @@ class Recognizer {
     }
 
     // 8. 泛化箭头剔除
-    if (!assumeClean && bestIou < iouTh && frac <= fracTh) return null;
+    if (!assumeClean && bestIou < iouTh && frac <= fracTh) {
+      diag.add('->ARROW_EMPTY(iou=${bestIou.toStringAsFixed(2)},frac=${frac.toStringAsFixed(2)})');
+      return null;
+    }
+    diag.add('frac=${frac.toStringAsFixed(4)} ->${color}${bestPiece ?? '?'}(${bestIou.toStringAsFixed(2)})');
     return bestPiece != null ? color + bestPiece : null;
   }
 
